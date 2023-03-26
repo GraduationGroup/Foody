@@ -6,56 +6,127 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
 from time import sleep
-from threading import Thread, Barrier
+from threading import Thread
+from datetime import datetime
 
+import pymongo
 import random
-import math
 import numpy as np
 
-
-TIME_OUT_LIMIT = 20
-MIN_DELAY = 0.5
-MAX_DELAY = 1.5
-
-NUMBER_OF_THREADS = 2
+TIME_OUT_LIMIT = 600
+NUMBER_OF_THREADS = 1
 
 
 def randomDelay():
-    delay_time = random.uniform(MIN_DELAY, MAX_DELAY)
+    delay_time = random.uniform(0.5, 1.5)
     sleep(delay_time)
+
+class Database:
+    def __init__(self):
+        self.URI = "mongodb+srv://npvu1510:Phanvu2001@cluster0.cd4eojq.mongodb.net/?retryWrites=true&w=majority"
+        try:
+            self.client = pymongo.MongoClient(self.URI)  
+            print("Setup DB completely !!!")
+            
+        except Exception:
+            print("ERROR:", Exception)
+            exit()
+    
+    def insertRes(self, resObj):
+        return self.client['POI'].foody.insert_one(resObj)
+    
 
 
 class FoodySpider:
     def __init__(self, numberOfThreads):
-        self.FB_EMAIL = ""
-        self.FB_PASSWORD = ""
-
-        # URLS
-        self.HOMEPAGE_URL = "https://www.foody.vn/"
-
-        # set options and run driver
-
-        options = webdriver.EdgeOptions()
-        # options.add_argument("--headless")
-        options.add_experimental_option("detach", True)
-
-        self.driver = webdriver.Edge(executable_path="/msedgedriver.exe", options= options)
-        self.driver.get(self.HOMEPAGE_URL)
         self.numberOfThreads = numberOfThreads
 
-        # # login
-        # self.fb_login(self.FB_EMAIL, self.FB_PASSWORD)
+        # inits
+        self.initIn4()
+        self.initDriver()
 
-        # crawl by place
+        # mongodb
+        self.db = Database()
+
+        # crawl
+        self.start_crawl()
+        
+
+    def initIn4(self):
+        # urls
+        self.LOGIN_URL = "https://id.foody.vn/account/login?returnUrl=https://www.foody.vn/"
+        self.HOME_URL = "https://www.foody.vn/"
+
+        # auth
+        self.FB_EMAIL = "84927389235"
+        self.FB_PASSWORD = "linhchim1302"
+    
+
+    def initDriver(self):
+        # set options
+        options = webdriver.EdgeOptions()
+        options.add_argument("--headless")
+        options.add_argument("user-agent=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 Edg/111.0.1661.54")
+        options.add_experimental_option("detach", True)
+
+        # init drivers and threads
+        self.mainDriver = webdriver.Edge(executable_path="/msedgedriver.exe", options= options)
+        self.drivers = []
+        for i in range(self.numberOfThreads):
+            driver = webdriver.Edge(executable_path="/msedgedriver.exe", options= options)
+            self.drivers.append(driver)
+
+
+    def start_crawl(self):
+        self.mainDriver.get(self.HOME_URL)
         self.traverse_provinces()
 
 
-    def fb_login(self, driver, email, password):
-        # driver.get(self.LOGIN_URL % returnUrl)
+    def traverse_provinces(self):
         randomDelay()
+        # self.driver.get("https://www.foody.vn/")
+        proHrefs = []
+        try:
+            # show popup
+            head_province = WebDriverWait(self.mainDriver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '#head-province .rn-nav-name')))
+            head_province.click()
+    
+            popupLocation = self.mainDriver.find_element(By.ID, "popupLocation")
+
+            # traverse
+            ul = WebDriverWait(popupLocation, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'ul li ul li ul')))
+            provinces = ul.find_elements(By.TAG_NAME, "li")
+
+            for province in provinces:
+                href = province.find_element(By.TAG_NAME, "a").get_attribute("href")
+                proHrefs.append(href) 
+            
+            self.mainDriver.quit()
+
+            # set up threads
+            proHrefs = np.array_split(np.array(proHrefs), self.numberOfThreads)
+
+            self.threads = []
+            for i in range(self.numberOfThreads):
+                t = Thread(target=self.crawlByProvince, args=(self.drivers[i], proHrefs[i], i,))
+                t.start()
+                self.threads.append(t)
+                sleep(1)
+            
+            for t in self.threads:
+                t.join()
+                
+
+
+        except  TimeoutException:
+            
+            self.mainDriver.quit()
+    
+
+    def fb_login(self, driver):
+        driver.get(self.LOGIN_URL)
 
         driver.find_element(By.CSS_SELECTOR, "fieldset .social-accountkit-btn-phone").click()
-
         main_window_handle = driver.current_window_handle
         signin_window_handle = None
 
@@ -71,105 +142,42 @@ class FoodySpider:
             loginForm = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.login_form_container')))
 
             randomDelay()
-            loginForm.find_element(By.ID, "email").send_keys(email)
+            loginForm.find_element(By.ID, "email").send_keys(self.FB_EMAIL)
             randomDelay()
-            loginForm.find_element(By.ID, "pass").send_keys(password)
+            loginForm.find_element(By.ID, "pass").send_keys(self.FB_PASSWORD)
             randomDelay()
             loginForm.find_element(By.CSS_SELECTOR, "input[type='submit']").click()
 
             driver.switch_to.window(main_window_handle)
 
+            WebDriverWait(driver, 40).until(EC.presence_of_element_located((By.CLASS_NAME, 'ico-search')))
+
+
         except  TimeoutException:
-            print("TIMEOUT")
+            
             driver.quit()
 
 
-    def traverse_provinces(self):
-        randomDelay()
-        # self.driver.get("https://www.foody.vn/")
-
-        self.provinceHrefs = []
-        try:
-            head_province = WebDriverWait(self.driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '#head-province .rn-nav-name')))
-
-            # show popup
-            head_province.click()
-            popupLocation = self.driver.find_element(By.ID, "popupLocation")
-
-            # traverse
-
-            ul = WebDriverWait(popupLocation, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'ul li ul li ul')))
-            provinces = ul.find_elements(By.TAG_NAME, "li")[:10]
-
-            for province in provinces:
-                href = province.find_element(By.TAG_NAME, "a").get_attribute("href")
-                self.provinceHrefs.append(href) 
-
-            self.driver.quit()
-
-
-            # parallel crawl
-            nPartSplit = math.ceil(len(self.provinceHrefs) / self.numberOfThreads)
-
-            splitProvinceHrefs = np.array_split(np.array(self.provinceHrefs), nPartSplit)
-
-            for smallHrefArr in splitProvinceHrefs:
-                n = len(smallHrefArr)
-                smallHrefArr = list(smallHrefArr)
-
-                limit = n if n < self.numberOfThreads else self.numberOfThreads
-
-                barrier = Barrier(limit)
-                threads = []
-
-                for href in smallHrefArr:
-                    # randomDelay()
-                    # self.driver.get(href)
-                    # self.traverse_categories()
-                    t = Thread(target=self.crawlByProvince, args=(href,barrier,)) 
-                    t.start()
-                    threads.append(t)
-            
-                for t in threads:
-                    t.join()
-
-
-        except  TimeoutException:
-            print("TIMEOUT")
-            self.driver.quit()
-    
-
-    def crawlByProvince(self, provinceUrl, barrier):
-        options = webdriver.EdgeOptions()
-        options.add_experimental_option("detach", True)
-
-        driver = webdriver.Edge(executable_path="/msedgedriver.exe", options= options)
-        driver.get(provinceUrl)
-
+    def crawlByProvince(self, driver, proHrefs, id, barrier = None):
         #login
-        btnLogin = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '.fd-btn-login-new')))
-        btnLogin.click()
+        self.fb_login(driver)
 
-        randomDelay()
-        self.fb_login(driver, self.FB_EMAIL, self.FB_PASSWORD)
-
-        randomDelay()
-        self.traverse_categories(driver)
-
-        barrier.wait()
+        print(f"THREAD {id}: Login!!!")
+        for href in proHrefs:
+            driver.get(href)
+            self.traverse_categories(driver, id)
 
 
-    def traverse_categories(self, driver):
-        randomDelay()
+    def traverse_categories(self, driver, id):
         # self.driver.get("https://www.foody.vn/")
+        catHrefs = []
 
-        cateHrefs = []
-
-        try:
-            head_category = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '#head-navigation')))
-
+        try:            
             # show popup
+            head_category = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '#head-navigation')))
             head_category.click()
+
+            sleep(2)
             menu_box = WebDriverWait(head_category, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '.menu-box')))
 
             food = menu_box.find_elements(By.CSS_SELECTOR, "li")[1]
@@ -180,23 +188,20 @@ class FoodySpider:
                 c = category.find_element(By.TAG_NAME, "a")
                 #title = c.get_attribute("title")
                 href = c.get_attribute("href")
-                cateHrefs.append(href)
-
-            for href in cateHrefs:
-                randomDelay()
-
+                catHrefs.append(href)
+            
+            for href in catHrefs:
                 driver.get(href)
-                self.traverse_restaurants(driver)
-
+                self.traverse_restaurants(driver, id)
 
         except  TimeoutException:
             print("TIME OUT")
             driver.quit()
 
 
-    def traverse_restaurants(self, driver):
+    def traverse_restaurants(self, driver, id):
+        print(f"THREAD {id}: {driver.current_url}")
         randomDelay()
-        # self.driver.get("https://www.foody.vn/")
         resUrls = []
         try:
             totalPage = 1
@@ -220,13 +225,12 @@ class FoodySpider:
                 # avatar = r.find_element(By.TAG_NAME, "img").get_attribute("src")
                 # point = r.find_element(By.CSS_SELECTOR, ".status").text
                 # name = r.find_element(By.TAG_NAME, "h2").text
-                resUrls.append(href)
+                if isinstance(href, str):
+                    resUrls.append(href)
                   
 
             for url in resUrls:
-                randomDelay()
                 print(url)
-
                 driver.get(url)
 
                 chained_res = url.find("thuong-hieu")
@@ -236,7 +240,7 @@ class FoodySpider:
                     self.traverse_chained_restaurants(driver)
 
         except TimeoutException:
-            print("TIMEOUT")
+            
             driver.quit()
 
 
@@ -256,24 +260,20 @@ class FoodySpider:
 
     def crawl_restaurant(self, driver):
         main_info = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '.main-info-title')))
-
-        restaurant_name = WebDriverWait(main_info, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.TAG_NAME, "h1"))).text
-
-        try:
-            restaurant_point = float(WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[itemprop=ratingValue]'))).text)
-        except TimeoutException:
-            restaurant_point = None
+        resName = WebDriverWait(main_info, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.TAG_NAME, "h1"))).text
 
         try:
-            restaurant_address = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '.res-common-add'))).text
+            resRating = float(WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[itemprop=ratingValue]'))).text)
         except TimeoutException:
-            restaurant_address = None
+            resRating = None
 
-        print(restaurant_name, restaurant_point, restaurant_address)
+        try:
+            resAddr = WebDriverWait(driver, TIME_OUT_LIMIT).until(EC.presence_of_element_located((By.CSS_SELECTOR, '.res-common-add'))).text
+        except TimeoutException:
+            resAddr = None
+
+        self.db.insertRes({"name": resName, "rating": resRating, "address": resAddr, "url": driver.current_url, "createdAt": datetime.now()})
 
 
 if __name__ == "__main__":
-    foody_spider = FoodySpider(NUMBER_OF_THREADS)
-
-
-
+    FoodySpider(NUMBER_OF_THREADS)
