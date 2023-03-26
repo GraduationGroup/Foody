@@ -17,7 +17,7 @@ TIME_OUT_LIMIT = 20
 MIN_DELAY = 0.5
 MAX_DELAY = 1.5
 
-NUMBER_OF_THREADS = 3
+NUMBER_OF_THREADS = 2
 
 
 def randomDelay():
@@ -52,7 +52,6 @@ class FoodySpider:
 
     def fb_login(self, driver, email, password):
         # driver.get(self.LOGIN_URL % returnUrl)
-        
         randomDelay()
 
         driver.find_element(By.CSS_SELECTOR, "fieldset .social-accountkit-btn-phone").click()
